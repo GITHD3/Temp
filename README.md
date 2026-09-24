@@ -11,26 +11,17 @@ index="bytebrew"
     "10.20.20.35",
     "10.20.20.36",
     "10.20.20.41")
-| eval denied=if(
-    status_code=401 OR status_code=403,
-    1,
-    0)
-| eventstats
-    max(denied) as uri_was_denied
-    by id.orig_h uri
-| where uri_was_denied=1
+| search status_code=401 OR status_code=403
+| bin _time span=1m
 | stats
-    count(eval(status_code=401 OR status_code=403)) as denied_requests
-    count(eval(status_code>=200 AND status_code<300)) as success_2xx_same_uri
-    dc(uri) as denied_uris
-    values(eval(
-        if(status_code>=200 AND status_code<300,
-        uri,
-        null())
-    )) as successful_uris
+    count as denied_per_minute
+    dc(uri) as targets_per_minute
+    by id.orig_h _time
+| stats
+    sum(denied_per_minute) as total_denied
+    max(denied_per_minute) as peak_denied_per_minute
+    round(avg(denied_per_minute),1) as avg_denied_per_active_minute
+    max(targets_per_minute) as max_targets_in_one_minute
+    dc(_time) as active_minutes
     by id.orig_h
-| eval successful_uris=if(
-    isnull(successful_uris),
-    "None",
-    successful_uris)
-| sort - denied_requests
+| sort - total_denied
