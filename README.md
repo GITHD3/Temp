@@ -1,34 +1,36 @@
 index="bytebrew"
 | search sourcetype="bytebrew:web_access"
-| search id.orig_h="45.77.210.24"
-    OR id.orig_h="185.220.101.45"
-    OR id.orig_h="103.27.202.99"
-    OR id.orig_h="198.51.100.220"
-    OR id.orig_h="167.94.138.55"
-    OR id.orig_h="104.131.12.90"
-    OR id.orig_h="89.248.165.44"
-    OR id.orig_h="10.20.20.35"
-    OR id.orig_h="10.20.20.36"
-    OR id.orig_h="10.20.20.41"
-| iplocation id.orig_h
-| eval Country=coalesce(
-    Country,
-    if(
-        cidrmatch("10.0.0.0/8", id.orig_h),
-        "Private/Internal",
-        "Unmapped"
-    )
-)
+| where in(id.orig_h,
+    "45.77.210.24",
+    "185.220.101.45",
+    "103.27.202.99",
+    "198.51.100.220",
+    "167.94.138.55",
+    "104.131.12.90",
+    "89.248.165.44",
+    "10.20.20.35",
+    "10.20.20.36",
+    "10.20.20.41")
+| eval denied=if(
+    status_code=401 OR status_code=403,
+    1,
+    0)
+| eventstats
+    max(denied) as uri_was_denied
+    by id.orig_h uri
+| where uri_was_denied=1
 | stats
-    count as total_requests
-    count(eval(status_code=401 OR status_code=403)) as unauthorized
-    count(eval(status_code>=200 AND status_code<300)) as responses_2xx
-    dc(uri) as unique_uris
-    values(method) as methods
-    values(notes) as notes
-    by id.orig_h Country
-| eval unauthorized_pct=round(
-    (unauthorized / total_requests) * 100,
-    1
-)
-| sort - unauthorized
+    count(eval(status_code=401 OR status_code=403)) as denied_requests
+    count(eval(status_code>=200 AND status_code<300)) as success_2xx_same_uri
+    dc(uri) as denied_uris
+    values(eval(
+        if(status_code>=200 AND status_code<300,
+        uri,
+        null())
+    )) as successful_uris
+    by id.orig_h
+| eval successful_uris=if(
+    isnull(successful_uris),
+    "None",
+    successful_uris)
+| sort - denied_requests
