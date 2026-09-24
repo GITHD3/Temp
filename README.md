@@ -1,3 +1,5 @@
+K
+
 index="bytebrew"
 | search sourcetype="bytebrew:web_access"
 | where in(id.orig_h,
@@ -20,8 +22,9 @@ index="bytebrew"
 | stats
     sum(denied_per_minute) as total_denied
     max(denied_per_minute) as peak_denied_per_minute
-    round(avg(denied_per_minute),1) as avg_denied_per_active_minute
+    avg(denied_per_minute) as avg_denied_per_active_minute
     max(targets_per_minute) as max_targets_in_one_minute
     dc(_time) as active_minutes
     by id.orig_h
+| eval avg_denied_per_active_minute=round(avg_denied_per_active_minute,1)
 | sort - total_denied
