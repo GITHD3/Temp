@@ -1,51 +1,27 @@
-L
-
+CCC
 
 
 index="bytebrew"
-(
-    sourcetype="bytebrew:loyalty_audit"
-    OR sourcetype="bytebrew:auth_audit"
-)
+| search sourcetype="bytebrew:loyalty_audit"
 
-| fillnull value="No note" notes
+| eval note=lower(coalesce(notes,""))
 
 | where NOT match(
-    lower(notes),
-    "^normal_|^routine_"
-)
-
-| eval account=coalesce(
-    loyalty_id,
-    account,
-    username,
-    user,
-    customer_id,
-    member_id
-)
-
-| eval source_ip=coalesce(
-    src_ip,
-    source_ip,
-    client_ip,
-    ip,
-    'id.orig_h'
-)
-
-| eval activity=coalesce(
-    action,
-    event,
-    operation,
-    activity,
-    event_type
+    note,
+    "^(normal_|routine_|background_)"
 )
 
 | table
     _time
-    sourcetype
+    loyalty_id
+    customer_id
     account
+    username
+    action
     source_ip
-    activity
+    src_ip
+    client_ip
     notes
+    _raw
 
 | sort _time
