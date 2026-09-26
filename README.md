@@ -1,73 +1,180 @@
+NN
+
 index="bytebrew"
 (
-    sourcetype="bytebrew:web_access"
-    OR sourcetype="bytebrew:system_change"
+    sourcetype="bytebrew:system_change"
+    OR sourcetype="bytebrew:web_access"
 )
 
-| eval evidence_type=case(
-    sourcetype="bytebrew:web_access","Web",
-    sourcetype="bytebrew:system_change","System Change",
-    true(),"Other"
-)
+| eval raw_text=lower(_raw)
 
-| eval relevant_web=if(
-    sourcetype="bytebrew:web_access"
-    AND host="order.bytebrew.example",
+| eval maintenance_flag=if(
+    sourcetype="bytebrew:system_change"
+    AND match(
+        raw_text,
+        "maintenance|scheduled|patch|upgrade|deploy|restart|change"
+    ),
     1,
     0
 )
 
-| eval change_text=if(
-    sourcetype="bytebrew:system_change",
-    _raw,
-    null()
+| eval suspicious_change=if(
+    sourcetype="bytebrew:system_change"
+    AND match(
+        raw_text,
+        "failed|failure|unauthorised|unauthorized|unexpected|critical|rollback"
+    ),
+    1,
+    0
 )
 
-| where
-    (
-        relevant_web=1
-        AND _time>=strptime(
-            "2026-04-06 10:15:00",
-            "%Y-%m-%d %H:%M:%S"
-        )
-        AND _time<=strptime(
-            "2026-04-06 11:00:00",
-            "%Y-%m-%d %H:%M:%S"
-        )
-    )
-    OR
-    (
-        sourcetype="bytebrew:system_change"
-        AND _time>=strptime(
-            "2026-04-06 10:15:00",
-            "%Y-%m-%d %H:%M:%S"
-        )
-        AND _time<=strptime(
-            "2026-04-06 11:00:00",
-            "%Y-%m-%d %H:%M:%S"
-        )
-    )
+| eval web_2xx=if(
+    sourcetype="bytebrew:web_access"
+    AND status_code>=200
+    AND status_code<300,
+    1,
+    0
+)
+
+| eval web_5xx=if(
+    sourcetype="bytebrew:web_access"
+    AND status_code>=500,
+    1,
+    0
+)
+
+| eval web_503=if(
+    sourcetype="bytebrew:web_access"
+    AND status_code=503,
+    1,
+    0
+)
 
 | bin _time span=5m
 
 | stats
-    count(eval(relevant_web=1)) as requests
-    count(eval(relevant_web=1 AND status_code>=200 AND status_code<300)) as responses_2xx
-    count(eval(relevant_web=1 AND status_code>=500)) as responses_5xx
-    count(eval(relevant_web=1 AND status_code=503)) as responses_503
-    values(change_text) as system_changes
+    sum(maintenance_flag) as maintenance_events
+    sum(suspicious_change) as suspicious_change_events
+    sum(web_2xx) as successful_requests
+    sum(web_5xx) as server_errors
+    sum(web_503) as service_unavailable
+    values(change_id) as change_ids
+    values(action) as actions
+    values(status) as change_status
+    values(component) as components
+    values(notes) as notes
+    values(host) as affected_hosts
     by _time
 
+| eval total_web_requests=
+    successful_requests+server_errors
+
 | eval error_pct=if(
-    requests>0,
-    round((responses_5xx/requests)*100,1),
+    total_web_requests>0,
+    round((server_errors/total_web_requests)*100,1),
     null()
 )
 
-| eval success_pct=if(
-    requests>0,
-    round((responses_2xx/requests)*100,1),
-    null()
-)
+| where
+    maintenance_events>0
+    OR suspicious_change_events>0
+    OR server_errors>0
 
 | sort _time
+
+
+______________
+
+
+
+
+index="bytebrew"
+| search sourcetype="bytebrew:file_share_audit"
+
+| spath
+
+| eval user_account=coalesce(
+    user,
+    username,
+    account,
+    actor,
+    actor_name,
+    src_user
+)
+
+| eval file_asset=coalesce(
+    file_name,
+    filename,
+    file,
+    object,
+    object_name,
+    path,
+    file_path
+)
+
+| eval destination_ip=coalesce(
+    dest_ip,
+    destination_ip,
+    dst_ip,
+    remote_ip,
+    external_ip,
+    'id.resp_h'
+)
+
+| eval operation=coalesce(
+    action,
+    operation,
+    event,
+    activity,
+    event_type
+)
+
+| eval transfer_bytes=coalesce(
+    bytes,
+    file_size,
+    size,
+    bytes_sent,
+    transfer_size,
+    0
+)
+
+| eval destination_type=case(
+    cidrmatch("10.0.0.0/8",destination_ip),
+        "Internal",
+
+    cidrmatch("172.16.0.0/12",destination_ip),
+        "Internal",
+
+    cidrmatch("192.168.0.0/16",destination_ip),
+        "Internal",
+
+    isnotnull(destination_ip),
+        "External/Other",
+
+    true(),
+        "Unknown"
+)
+
+| stats
+    count as events
+    sum(transfer_bytes) as total_bytes
+    values(operation) as operations
+    values(file_asset) as files
+    values(destination_ip) as destinations
+    values(destination_type) as destination_types
+    values(notes) as notes
+    earliest(_time) as first_seen
+    latest(_time) as last_seen
+    by user_account
+
+| eval total_MB=round(
+    total_bytes/1024/1024,
+    2
+)
+
+| convert
+    ctime(first_seen)
+    ctime(last_seen)
+
+| sort - total_bytes - events
+
