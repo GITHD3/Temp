@@ -1,4 +1,5 @@
-X
+Q
+
 
 
 index="bytebrew"
@@ -9,99 +10,90 @@ index="bytebrew"
 )
 "192.168.50.18"
 
-| eval evidence_source=case(
-    sourcetype="bytebrew:network_conn","Network",
-    sourcetype="bytebrew:pos_status","POS Status",
-    sourcetype="bytebrew:workstation_sysmon","Workstation",
-    true(),"Other"
-)
-
-| eval source_ip=coalesce(
-    id.orig_h,
+| eval src_ip=coalesce(
+    'id.orig_h',
     src_ip,
-    src,
     source_ip,
-    client_ip
+    client_ip,
+    src
 )
 
-| eval destination_ip=coalesce(
-    id.resp_h,
+| eval dst_ip=coalesce(
+    'id.resp_h',
+    dst_ip,
     dest_ip,
-    dest,
     destination_ip,
-    server_ip
+    server_ip,
+    dest
+)
+
+| eval peer_ip=case(
+    src_ip="192.168.50.18",dst_ip,
+    dst_ip="192.168.50.18",src_ip,
+    true(),null()
 )
 
 | eval protocol=coalesce(
     proto,
     protocol,
-    service,
-    transport
+    service
 )
 
-| eval outbound_bytes=coalesce(
-    orig_bytes,
-    bytes_out,
-    bytes_sent,
-    src_bytes,
-    request_body_len,
-    0
-)
+| eval traffic_bytes=
+    coalesce(orig_bytes,0)
+    +
+    coalesce(resp_bytes,0)
 
-| eval inbound_bytes=coalesce(
-    resp_bytes,
-    bytes_in,
-    bytes_received,
-    dest_bytes,
-    0
-)
+| eval raw_text=lower(_raw)
 
-| eval total_bytes=outbound_bytes+inbound_bytes
-
-| eval event_text=lower(_raw)
-
-| eval event_signal=case(
-    match(event_text,"disconnect|disconnected|offline"),
+| eval signal=case(
+    match(raw_text,"disconnect|offline|connection lost"),
         "Disconnect",
 
-    match(event_text,"timeout|timed out|latency|slow|degraded"),
+    match(raw_text,"slow|latency|timeout|degraded"),
         "Performance",
 
-    match(event_text,"alert|warning|failure|failed|error"),
-        "Alert/Error",
-
-    match(event_text,"cpu|memory|disk|resource"),
+    match(raw_text,"cpu|memory|disk|resource"),
         "Resource",
 
+    match(raw_text,"error|failed|failure|warning"),
+        "Error",
+
     true(),
-        "Other"
+        "Normal"
 )
 
 | bin _time span=5m
 
 | stats
     count as events
-    sum(total_bytes) as total_bytes
-    dc(destination_ip) as unique_destinations
-    values(destination_ip) as destinations
+    sum(traffic_bytes) as traffic_bytes
+    dc(peer_ip) as unique_peers
+    values(peer_ip) as peers
     values(protocol) as protocols
-    count(eval(event_signal="Disconnect")) as disconnect_events
-    count(eval(event_signal="Performance")) as performance_events
-    count(eval(event_signal="Alert/Error")) as alert_error_events
-    count(eval(event_signal="Resource")) as resource_events
-    values(event_signal) as observed_signals
-    by _time evidence_source
+    count(eval(signal="Disconnect")) as disconnects
+    count(eval(signal="Performance")) as performance_events
+    count(eval(signal="Resource")) as resource_events
+    count(eval(signal="Error")) as errors
+    by _time sourcetype
 
-| eval total_MB=round(total_bytes/1024/1024,2)
+| eval traffic_MB=round(
+    traffic_bytes/1024/1024,
+    2
+)
 
-| sort _time evidence_source
+| sort - traffic_MB
+
+| head 25
 
 
 
 
 
+______________________
 
-N
+
+
 
 
 
@@ -109,140 +101,74 @@ N
 index="bytebrew"
 | search sourcetype="bytebrew:web_access"
 
-| eval request_text=lower(
-    coalesce(uri,"")
-    ." ".
-    coalesce(request_body,"")
-    ." ".
-    coalesce(user_agent,"")
-)
+| eval request_text=lower(_raw)
 
-| eval attack_type=case(
+| eval exploit_type=case(
 
     match(
         request_text,
-        "union(\+|%20| )select|select(\+|%20| ).*from|or(\+|%20| )+1=1|%27|'.*or"
+        "union.{0,40}select|select.{0,40}from|information_schema|or.{0,15}1=1|sleep\\(|benchmark\\("
     ),
-    "Possible SQL Injection",
+    "SQL Injection",
 
     match(
         request_text,
-        "<script|%3cscript|javascript:|onerror=|onload="
+        "<script|%3cscript|javascript:|onerror=|onload=|alert\\(|%3csvg"
     ),
-    "Possible XSS",
+    "Cross-Site Scripting",
 
     match(
         request_text,
-        "\.\./|%2e%2e%2f|/etc/passwd"
+        "\\.\\./|%2e%2e%2f|%252e%252e|/etc/passwd|boot\\.ini"
     ),
-    "Possible Path Traversal",
+    "Path Traversal",
 
     match(
         request_text,
-        "cmd=|exec=|/bin/sh|powershell|whoami|%3b"
+        "cmd=|exec=|/bin/sh|whoami|powershell|wget|curl.{0,30}http"
     ),
-    "Possible Command Injection",
-
-    match(
-        request_text,
-        "\.env|\.git/config|/server-status|/config\.php|backup\.zip|/api/debug|/admin"
-    ),
-    "Sensitive Endpoint Probing",
+    "Command Injection",
 
     true(),
     null()
 )
 
-| eval suspicious=if(
-    isnotnull(attack_type),
-    1,
-    0
-)
+| where isnotnull(exploit_type)
 
-| eventstats
-    max(suspicious) as suspicious_source
-    min(eval(if(suspicious=1,_time,null()))) as first_suspicious_time
-    by id.orig_h
-
-| where suspicious_source=1
-
-| eval suspicious_success=if(
-    suspicious=1
-    AND status_code>=200
+| eval successful=if(
+    status_code>=200
     AND status_code<300,
     1,
     0
 )
 
-| eval suspicious_denied=if(
-    suspicious=1
-    AND (status_code=401 OR status_code=403),
-    1,
-    0
-)
-
-| eval suspicious_error=if(
-    suspicious=1
-    AND status_code>=400,
-    1,
-    0
-)
-
-| eval subsequent_2xx=if(
-    _time>first_suspicious_time
-    AND suspicious=0
-    AND status_code>=200
-    AND status_code<300,
-    1,
-    0
-)
-
-| eval automated_tool=if(
-    match(
-        lower(coalesce(user_agent,"")),
-        "python-requests|curl|wget|sqlmap|nikto|nmap|scanner"
-    ),
+| eval denied=if(
+    status_code=401
+    OR status_code=403,
     1,
     0
 )
 
 | stats
-    count as total_source_requests
-    sum(suspicious) as suspicious_requests
-    sum(suspicious_denied) as denied_suspicious_requests
-    sum(suspicious_success) as suspicious_2xx
-    sum(suspicious_error) as suspicious_errors
-    sum(subsequent_2xx) as subsequent_normal_2xx
-    max(automated_tool) as automated_tool_seen
-    dc(eval(if(suspicious=1,uri,null()))) as targeted_uri_count
-    values(attack_type) as attack_types
-    values(eval(if(suspicious=1,uri,null()))) as targeted_uris
+    count as exploit_attempts
+    sum(denied) as denied_attempts
+    sum(successful) as exploit_2xx
+    values(status_code) as status_codes
+    dc(uri) as target_count
+    values(uri) as targeted_uris
     values(method) as methods
     values(user_agent) as user_agents
     earliest(_time) as first_seen
     latest(_time) as last_seen
-    by id.orig_h
+    by id.orig_h exploit_type
 
 | convert
     ctime(first_seen)
     ctime(last_seen)
 
-| eval suspicious_success_pct=round(
-    (suspicious_2xx/suspicious_requests)*100,
+| eval success_pct=round(
+    (exploit_2xx/exploit_attempts)*100,
     1
 )
 
-| sort - suspicious_requests
-
-
-
-
-
-
-
-
-
-
-
-
-
+| sort - exploit_attempts
