@@ -1,71 +1,73 @@
-Ca
-
-
 index="bytebrew"
-| search sourcetype="bytebrew:mail_audit"
-| search auth_result="fail_alignment"
-
-| eval recipient=coalesce(
-    recipient,
-    to,
-    dest_user,
-    rcpt_to
+(
+    sourcetype="bytebrew:web_access"
+    OR sourcetype="bytebrew:system_change"
 )
 
-| eval source_ip=coalesce(
-    src_ip,
-    source_ip,
-    client_ip
+| eval evidence_type=case(
+    sourcetype="bytebrew:web_access","Web",
+    sourcetype="bytebrew:system_change","System Change",
+    true(),"Other"
 )
 
-| table
-    _time
-    display_from
-    from
-    recipient
-    subject
-    auth_result
-    source_ip
-    dest_ip
+| eval relevant_web=if(
+    sourcetype="bytebrew:web_access"
+    AND host="order.bytebrew.example",
+    1,
+    0
+)
 
-| sort _time
-
-
-______
-
-
-index="bytebrew"
-| search sourcetype="bytebrew:web_access"
+| eval change_text=if(
+    sourcetype="bytebrew:system_change",
+    _raw,
+    null()
+)
 
 | where
-    _time>=strptime(
-        "2026-04-06 10:20:00",
-        "%Y-%m-%d %H:%M:%S"
+    (
+        relevant_web=1
+        AND _time>=strptime(
+            "2026-04-06 10:15:00",
+            "%Y-%m-%d %H:%M:%S"
+        )
+        AND _time<=strptime(
+            "2026-04-06 11:00:00",
+            "%Y-%m-%d %H:%M:%S"
+        )
     )
-    AND
-    _time<=strptime(
-        "2026-04-06 10:50:00",
-        "%Y-%m-%d %H:%M:%S"
+    OR
+    (
+        sourcetype="bytebrew:system_change"
+        AND _time>=strptime(
+            "2026-04-06 10:15:00",
+            "%Y-%m-%d %H:%M:%S"
+        )
+        AND _time<=strptime(
+            "2026-04-06 11:00:00",
+            "%Y-%m-%d %H:%M:%S"
+        )
     )
 
 | bin _time span=5m
 
 | stats
-    count as total_requests
-    count(eval(status_code>=200 AND status_code<300)) as responses_2xx
-    count(eval(status_code>=500)) as responses_5xx
-    count(eval(status_code=503)) as responses_503
-    dc(id.orig_h) as unique_sources
-    by _time host
+    count(eval(relevant_web=1)) as requests
+    count(eval(relevant_web=1 AND status_code>=200 AND status_code<300)) as responses_2xx
+    count(eval(relevant_web=1 AND status_code>=500)) as responses_5xx
+    count(eval(relevant_web=1 AND status_code=503)) as responses_503
+    values(change_text) as system_changes
+    by _time
 
-| eval error_pct=round(
-    (responses_5xx/total_requests)*100,
-    1
+| eval error_pct=if(
+    requests>0,
+    round((responses_5xx/requests)*100,1),
+    null()
 )
 
-| eval success_pct=round(
-    (responses_2xx/total_requests)*100,
-    1
+| eval success_pct=if(
+    requests>0,
+    round((responses_2xx/requests)*100,1),
+    null()
 )
 
-| sort _time host
+| sort _time
