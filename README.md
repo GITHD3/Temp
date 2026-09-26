@@ -1,8 +1,6 @@
-index="bytebrew"
-| search sourcetype="bytebrew:file_share_audit"
+index="bytebrew" sourcetype="bytebrew:file_share_audit"
 | search dest_domain="suspicious-transfer.example"
 | spath path=username output=user_account
-
 | table
     _time
     user_account
@@ -12,5 +10,4 @@ index="bytebrew"
     share_id
     link_label
     notes
-
 | sort _time
