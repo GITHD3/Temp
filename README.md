@@ -5,16 +5,38 @@ index="bytebrew"
     OR action="download"
     OR action="upload"
 
+| eval user_account=coalesce(
+    user,
+    username,
+    actor,
+    account,
+    "Unknown"
+)
+
+| eval file_asset=coalesce(
+    filename,
+    file_name,
+    file,
+    "Unknown"
+)
+
+| eval destination=coalesce(
+    dest_domain,
+    destination_domain,
+    remote_domain,
+    "None recorded"
+)
+
 | stats
     count as events
-    values(filename) as files
-    values(dest_domain) as destinations
+    values(file_asset) as files
+    values(destination) as destinations
     values(share_id) as share_ids
     values(link_label) as link_labels
     values(notes) as notes
     earliest(_time) as first_seen
     latest(_time) as last_seen
-    by user action
+    by user_account action
 
 | convert
     ctime(first_seen)
