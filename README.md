@@ -1,18 +1,18 @@
-F
+S
+
 
 index="bytebrew"
 | search sourcetype="bytebrew:web_access"
-| where in(id.orig_h,
-    "45.77.210.24",
-    "185.220.101.45",
-    "103.27.202.99",
-    "198.51.100.220",
-    "167.94.138.55",
-    "104.131.12.90",
-    "89.248.165.44",
-    "10.20.20.35",
-    "10.20.20.36",
-    "10.20.20.41")
+| search id.orig_h="45.77.210.24"
+    OR id.orig_h="185.220.101.45"
+    OR id.orig_h="103.27.202.99"
+    OR id.orig_h="198.51.100.220"
+    OR id.orig_h="167.94.138.55"
+    OR id.orig_h="104.131.12.90"
+    OR id.orig_h="89.248.165.44"
+    OR id.orig_h="10.20.20.35"
+    OR id.orig_h="10.20.20.36"
+    OR id.orig_h="10.20.20.41"
 | search status_code=401 OR status_code=403
 | bin _time span=1m
 | stats
