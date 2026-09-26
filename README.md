@@ -1,57 +1,62 @@
-n
+dd
 
 index="bytebrew"
 | search sourcetype="bytebrew:web_access"
+| search id.orig_h="198.51.100.220"
+| search uri="/api/private/export"
+
+| eval result_type=case(
+    status_code=401 OR status_code=403,
+        "Denied",
+
+    status_code>=200 AND status_code<300,
+        "Successful 2xx",
+
+    status_code>=500,
+        "Server Error",
+
+    true(),
+        "Other"
+)
+
+| eval denied_time=if(
+    result_type="Denied",
+    _time,
+    null()
+)
+
+| eval success_time=if(
+    result_type="Successful 2xx",
+    _time,
+    null()
+)
 
 | stats
     count as total_requests
-    count(eval(status_code=401 OR status_code=403)) as denied
-    count(eval(status_code>=200 AND status_code<300)) as responses_2xx
-    count(eval(status_code>=500)) as server_errors
-    avg(request_body_len) as avg_request_body
-    max(request_body_len) as max_request_body
-    avg(response_body_len) as avg_response_body
-    max(response_body_len) as max_response_body
+    count(eval(result_type="Denied")) as denied_requests
+    count(eval(result_type="Successful 2xx")) as successful_2xx
+    count(eval(result_type="Server Error")) as server_errors
     values(status_code) as status_codes
-    values(status_msg) as status_messages
     values(method) as methods
-    values(tags) as tags
-    values(notes) as notes
     values(user_agent) as user_agents
-    by id.orig_h uri
+    min(denied_time) as first_denied
+    max(denied_time) as last_denied
+    min(success_time) as first_success
+    max(success_time) as last_success
 
-| eval scripted=if(
-    match(
-        lower(mvjoin(user_agents," ")),
-        "python-requests|curl|wget|sqlmap|nikto|scanner"
-    ),
-    1,
-    0
+| convert
+    ctime(first_denied)
+    ctime(last_denied)
+    ctime(first_success)
+    ctime(last_success)
+
+| eval interpretation=case(
+    denied_requests>0 AND successful_2xx>0,
+        "Denied attempts followed by successful endpoint responses",
+
+    denied_requests>0 AND successful_2xx=0,
+        "Attempts observed but no successful endpoint response",
+
+    true(),
+        "No clear denied-to-success transition"
 )
-
-| eval sensitive=if(
-    match(
-        lower(uri),
-        "/api/private|/api/debug|/internal|/admin|/config|\\.env|\\.git|backup|server-status"
-    ),
-    1,
-    0
-)
-
-| where
-    denied>0
-    OR server_errors>0
-    OR scripted=1
-    OR sensitive=1
-
-| eval success_pct=round(
-    (responses_2xx/total_requests)*100,
-    1
-)
-
-| sort
-    - server_errors
-    - denied
-    - total_requests
-
-| head 25
