@@ -1,6 +1,3 @@
-X
-
-
 index="bytebrew"
 | search sourcetype="bytebrew:loyalty_audit"
 
@@ -9,19 +6,18 @@ index="bytebrew"
 
 | where
     (isnotnull(export_id) AND export_id!="")
-    OR isnotnull(data_scope)
     OR match(
         act,
         "export|download|bulk|dump"
     )
     OR match(
         note,
-        "leak|exfil|export|bulk|dump|unauthor|suspicious"
+        "leak|exfil|unauthor|suspicious.*export|bulk.*export|data.*export|account.*takeover"
     )
 
 | where NOT match(
     note,
-    "unusual_but_benign|travel_or_vpn_like|normal_|routine_|background_"
+    "legitimate_support_lookup|unusual_but_benign|travel_or_vpn_like|normal_|routine_|background_"
 )
 
 | table
