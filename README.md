@@ -1,14 +1,10 @@
 <form version="1.1">
-  <label>ByteBrew Café Co. - SOC Security Monitoring Dashboard</label>
-  <description>
-    Security monitoring dashboard for ByteBrew Café Co. covering unauthorised access,
-    geographic anomalies, web availability, POS performance, suspicious email activity,
-    external file sharing, and loyalty-account exports.
-  </description>
+
+  <label>ByteBrew Café Co. Security Dashboard</label>
 
   <fieldset submitButton="false">
     <input type="time" token="global_time">
-      <label>Monitoring Period</label>
+      <label>Time Range</label>
       <default>
         <earliest>0</earliest>
         <latest>now</latest>
@@ -16,10 +12,6 @@
     </input>
   </fieldset>
 
-
-  <!-- ====================================================== -->
-  <!-- ROW 1 - SECURITY OVERVIEW KPIs                         -->
-  <!-- ====================================================== -->
 
   <row>
 
@@ -86,7 +78,7 @@ index="bytebrew"
 
         <option name="drilldown">none</option>
         <option name="numberPrecision">0</option>
-        <option name="underLabel">Potential spoofing</option>
+        <option name="underLabel">Failed alignment</option>
 
       </single>
     </panel>
@@ -94,7 +86,7 @@ index="bytebrew"
 
     <panel>
       <single>
-        <title>Loyalty Export Completions</title>
+        <title>Successful Loyalty Exports</title>
 
         <search>
           <query><![CDATA[
@@ -109,7 +101,7 @@ index="bytebrew"
 
         <option name="drilldown">none</option>
         <option name="numberPrecision">0</option>
-        <option name="underLabel">Successful exports</option>
+        <option name="underLabel">Completed exports</option>
 
       </single>
     </panel>
@@ -117,30 +109,28 @@ index="bytebrew"
   </row>
 
 
-  <!-- ====================================================== -->
-  <!-- ROW 2 - UNAUTHORISED ACCESS                           -->
-  <!-- ====================================================== -->
-
   <row>
 
     <panel>
       <table>
-
-        <title>Top 10 Sources of Unauthorised Access Attempts</title>
+        <title>Top Sources of Unauthorised Access</title>
 
         <search>
           <query><![CDATA[
 index="bytebrew"
 | search sourcetype="bytebrew:web_access"
-| eval unauthorized=if(status_code=401 OR status_code=403,1,0)
-| where unauthorized=1
+| search status_code=401 OR status_code=403
+
 | stats
     count as unauthorized_attempts
     dc(uri) as unique_targets
     values(method) as methods
     by id.orig_h
+
 | sort - unauthorized_attempts
+
 | head 10
+
 | rename
     id.orig_h as "Source IP"
     unauthorized_attempts as "Unauthorised Attempts"
@@ -162,24 +152,33 @@ index="bytebrew"
 
     <panel>
       <chart>
-
-        <title>Unauthorised Requests by Geographic Region</title>
+        <title>Unauthorised Requests by Location</title>
 
         <search>
           <query><![CDATA[
 index="bytebrew"
 | search sourcetype="bytebrew:web_access"
 | search status_code=401 OR status_code=403
+
 | iplocation id.orig_h
+
 | eval Country=coalesce(
     Country,
-    if(cidrmatch("10.0.0.0/8",id.orig_h),"Private/Internal","Unmapped")
+    if(
+        cidrmatch("10.0.0.0/8",id.orig_h),
+        "Private/Internal",
+        "Unmapped"
+    )
 )
+
 | stats count as unauthorized_requests by Country
+
 | sort - unauthorized_requests
+
 | head 10
+
 | rename
-    Country as "Region"
+    Country as "Location"
     unauthorized_requests as "Unauthorised Requests"
           ]]></query>
 
@@ -189,8 +188,6 @@ index="bytebrew"
 
         <option name="charting.chart">bar</option>
         <option name="charting.legend.placement">none</option>
-        <option name="charting.axisTitleX.text">Unauthorised Requests</option>
-        <option name="charting.axisTitleY.text">Region</option>
 
       </chart>
     </panel>
@@ -198,26 +195,25 @@ index="bytebrew"
   </row>
 
 
-  <!-- ====================================================== -->
-  <!-- ROW 3 - WEB PLATFORM SECURITY & AVAILABILITY           -->
-  <!-- ====================================================== -->
-
   <row>
 
     <panel>
       <chart>
-
-        <title>Ordering Platform - Successful vs Server Error Responses</title>
+        <title>Ordering Platform Availability</title>
 
         <search>
           <query><![CDATA[
 index="bytebrew"
 | search sourcetype="bytebrew:web_access"
-| search host="order.bytebrew.example"
+
+| where
+    host="order.bytebrew.example"
+    OR like(uri,"/api/order/%")
+
 | timechart span=5m
     count(eval(status_code>=200 AND status_code<300)) as "Successful 2xx"
     count(eval(status_code>=500)) as "Server Errors 5xx"
-    count(eval(status_code=503)) as "Service Unavailable 503"
+    count(eval(status_code=503)) as "HTTP 503"
           ]]></query>
 
           <earliest>$global_time.earliest$</earliest>
@@ -226,80 +222,14 @@ index="bytebrew"
 
         <option name="charting.chart">line</option>
         <option name="charting.legend.placement">bottom</option>
-        <option name="charting.axisTitleY.text">Requests per 5 Minutes</option>
 
       </chart>
     </panel>
 
 
     <panel>
-      <table>
-
-        <title>High-Risk Web Endpoint Activity</title>
-
-        <search>
-          <query><![CDATA[
-index="bytebrew"
-| search sourcetype="bytebrew:web_access"
-
-| eval sensitive=if(
-    match(
-        lower(uri),
-        "/api/private|/api/debug|/internal|/admin|/config|\.env|\.git|backup|server-status"
-    ),
-    1,
-    0
-)
-
-| where sensitive=1
-
-| stats
-    count as requests
-    count(eval(status_code=401 OR status_code=403)) as denied
-    count(eval(status_code>=200 AND status_code<300)) as responses_2xx
-    count(eval(status_code>=500)) as server_errors
-    values(status_code) as status_codes
-    values(method) as methods
-    by id.orig_h uri
-
-| sort - requests
-| head 15
-
-| rename
-    id.orig_h as "Source IP"
-    uri as "Endpoint"
-    requests as "Requests"
-    denied as "Denied"
-    responses_2xx as "2xx Responses"
-    server_errors as "5xx Errors"
-    status_codes as "Status Codes"
-    methods as "Methods"
-          ]]></query>
-
-          <earliest>$global_time.earliest$</earliest>
-          <latest>$global_time.latest$</latest>
-        </search>
-
-        <option name="count">15</option>
-        <option name="drilldown">none</option>
-        <option name="wrap">true</option>
-
-      </table>
-    </panel>
-
-  </row>
-
-
-  <!-- ====================================================== -->
-  <!-- ROW 4 - POS PERFORMANCE                               -->
-  <!-- ====================================================== -->
-
-  <row>
-
-    <panel>
       <chart>
-
-        <title>POS Workstation 192.168.50.18 - Network Load</title>
+        <title>POS Workstation Network Traffic</title>
 
         <search>
           <query><![CDATA[
@@ -312,9 +242,11 @@ index="bytebrew"
     +
     coalesce(resp_bytes,0)
 
+| eval network_MB=
+    network_bytes/1024/1024
+
 | timechart span=5m
-    count as "Connections"
-    sum(network_bytes) as "Network Bytes"
+    sum(network_MB) as "Network Traffic MB"
           ]]></query>
 
           <earliest>$global_time.earliest$</earliest>
@@ -322,16 +254,19 @@ index="bytebrew"
         </search>
 
         <option name="charting.chart">line</option>
-        <option name="charting.legend.placement">bottom</option>
+        <option name="charting.legend.placement">none</option>
 
       </chart>
     </panel>
 
+  </row>
+
+
+  <row>
 
     <panel>
       <table>
-
-        <title>POS Workstation - Top Network Destinations</title>
+        <title>POS Workstation Top Destinations</title>
 
         <search>
           <query><![CDATA[
@@ -357,6 +292,7 @@ index="bytebrew"
 )
 
 | sort - total_bytes
+
 | head 10
 
 | rename
@@ -384,19 +320,10 @@ index="bytebrew"
       </table>
     </panel>
 
-  </row>
-
-
-  <!-- ====================================================== -->
-  <!-- ROW 5 - EMAIL SECURITY                                -->
-  <!-- ====================================================== -->
-
-  <row>
 
     <panel>
       <table>
-
-        <title>Suspicious Email Authentication / Alignment Failures</title>
+        <title>Email Alignment Failures</title>
 
         <search>
           <query><![CDATA[
@@ -404,8 +331,13 @@ index="bytebrew"
 | search sourcetype="bytebrew:mail_audit"
 | search auth_result="fail_alignment"
 
+| eval Time=strftime(
+    _time,
+    "%Y-%m-%d %H:%M:%S"
+)
+
 | table
-    _time
+    Time
     display_from
     subject
     auth_result
@@ -413,122 +345,34 @@ index="bytebrew"
     dest_ip
 
 | rename
-    _time as "Time"
     display_from as "Displayed Sender"
     subject as "Subject"
     auth_result as "Authentication"
     src_ip as "Source IP"
     dest_ip as "Destination IP"
 
-| sort - "Time"
+| sort - Time
           ]]></query>
 
           <earliest>$global_time.earliest$</earliest>
           <latest>$global_time.latest$</latest>
         </search>
 
-        <option name="count">15</option>
+        <option name="count">13</option>
         <option name="drilldown">none</option>
         <option name="wrap">true</option>
 
       </table>
-    </panel>
-
-
-    <panel>
-      <chart>
-
-        <title>Email Alignment Failures Over Time</title>
-
-        <search>
-          <query><![CDATA[
-index="bytebrew"
-| search sourcetype="bytebrew:mail_audit"
-| search auth_result="fail_alignment"
-| timechart span=1h count as "Alignment Failures"
-          ]]></query>
-
-          <earliest>$global_time.earliest$</earliest>
-          <latest>$global_time.latest$</latest>
-        </search>
-
-        <option name="charting.chart">column</option>
-        <option name="charting.legend.placement">none</option>
-
-      </chart>
     </panel>
 
   </row>
 
 
-  <!-- ====================================================== -->
-  <!-- ROW 6 - FILE SHARING / EXFILTRATION                   -->
-  <!-- ====================================================== -->
-
   <row>
 
     <panel>
       <table>
-
-        <title>External File Sharing Activity</title>
-
-        <search>
-          <query><![CDATA[
-index="bytebrew"
-| search sourcetype="bytebrew:file_share_audit"
-
-| where isnotnull(dest_domain)
-
-| eval destination_type=if(
-    match(
-        lower(dest_domain),
-        "bytebrew\.example$"
-    ),
-    "Internal",
-    "External"
-)
-
-| where destination_type="External"
-
-| table
-    _time
-    username
-    action
-    filename
-    dest_domain
-    share_id
-    link_label
-    notes
-
-| rename
-    _time as "Time"
-    username as "User"
-    action as "Action"
-    filename as "File"
-    dest_domain as "External Destination"
-    share_id as "Share ID"
-    link_label as "Link Label"
-    notes as "Notes"
-
-| sort - "Time"
-          ]]></query>
-
-          <earliest>$global_time.earliest$</earliest>
-          <latest>$global_time.latest$</latest>
-        </search>
-
-        <option name="count">15</option>
-        <option name="drilldown">none</option>
-        <option name="wrap">true</option>
-
-      </table>
-    </panel>
-
-
-    <panel>
-      <table>
-
-        <title>High-Risk External Transfer Activity</title>
+        <title>Suspicious External File Transfer</title>
 
         <search>
           <query><![CDATA[
@@ -536,8 +380,13 @@ index="bytebrew"
 | search sourcetype="bytebrew:file_share_audit"
 | search dest_domain="suspicious-transfer.example"
 
+| eval Time=strftime(
+    _time,
+    "%Y-%m-%d %H:%M:%S"
+)
+
 | table
-    _time
+    Time
     username
     action
     filename
@@ -547,16 +396,15 @@ index="bytebrew"
     notes
 
 | rename
-    _time as "Time"
     username as "User"
     action as "Action"
     filename as "File"
     dest_domain as "Destination"
     share_id as "Share ID"
-    link_label as "Link Label"
-    notes as "Evidence"
+    link_label as "Link"
+    notes as "Notes"
 
-| sort - "Time"
+| sort Time
           ]]></query>
 
           <earliest>$global_time.earliest$</earliest>
@@ -570,19 +418,10 @@ index="bytebrew"
       </table>
     </panel>
 
-  </row>
-
-
-  <!-- ====================================================== -->
-  <!-- ROW 7 - LOYALTY ACCOUNT SECURITY                      -->
-  <!-- ====================================================== -->
-
-  <row>
 
     <panel>
       <table>
-
-        <title>Loyalty Account Data Export Activity</title>
+        <title>Loyalty Account Export Activity</title>
 
         <search>
           <query><![CDATA[
@@ -596,7 +435,7 @@ index="bytebrew"
 | stats
     count as export_events
     count(eval(action="export_complete" AND result="success")) as successful_exports
-    values(data_scope) as exported_data
+    values(data_scope) as data_scope
     values(export_id) as export_ids
     values(src_ip) as source_ips
     values(notes) as notes
@@ -611,10 +450,10 @@ index="bytebrew"
 | sort - successful_exports
 
 | rename
-    customer_username as "Loyalty Account"
+    customer_username as "Account"
     export_events as "Export Events"
     successful_exports as "Successful Exports"
-    exported_data as "Data Scope"
+    data_scope as "Data Scope"
     export_ids as "Export ID"
     source_ips as "Source IP"
     notes as "Notes"
@@ -626,18 +465,21 @@ index="bytebrew"
           <latest>$global_time.latest$</latest>
         </search>
 
-        <option name="count">15</option>
+        <option name="count">10</option>
         <option name="drilldown">none</option>
         <option name="wrap">true</option>
 
       </table>
     </panel>
 
+  </row>
+
+
+  <row>
 
     <panel>
       <table>
-
-        <title>Jordan Lee Export / Authentication Source Correlation</title>
+        <title>Jordan Lee Export and Authentication Activity</title>
 
         <search>
           <query><![CDATA[
@@ -647,7 +489,7 @@ index="bytebrew"
     OR sourcetype="bytebrew:auth_audit"
 )
 
-| eval identity=coalesce(
+| eval account=coalesce(
     customer_username,
     username
 )
@@ -676,11 +518,11 @@ index="bytebrew"
     values(data_scope) as data_scope
     values(export_id) as export_ids
     values(notes) as notes
-    by sourcetype identity source_ip
+    by sourcetype account source_ip
 
 | rename
-    sourcetype as "Evidence Source"
-    identity as "Account"
+    sourcetype as "Source"
+    account as "Account"
     source_ip as "Source IP"
     events as "Events"
     actions as "Actions"
@@ -701,25 +543,15 @@ index="bytebrew"
       </table>
     </panel>
 
-  </row>
-
-
-  <!-- ====================================================== -->
-  <!-- ROW 8 - CHANGE / AVAILABILITY MONITORING              -->
-  <!-- ====================================================== -->
-
-  <row>
 
     <panel>
       <table>
-
-        <title>System Change and Maintenance Monitoring</title>
+        <title>System Changes</title>
 
         <search>
           <query><![CDATA[
 index="bytebrew"
 | search sourcetype="bytebrew:system_change"
-
 | where isnotnull(change_id)
 
 | stats
@@ -762,18 +594,21 @@ index="bytebrew"
       </table>
     </panel>
 
+  </row>
+
+
+  <row>
 
     <panel>
       <chart>
-
-        <title>ByteBrew Web Error Trend</title>
+        <title>Web Activity Trend</title>
 
         <search>
           <query><![CDATA[
 index="bytebrew"
 | search sourcetype="bytebrew:web_access"
 
-| timechart span=15m
+| timechart span=1h
     count(eval(status_code>=200 AND status_code<300)) as "2xx Success"
     count(eval(status_code=401 OR status_code=403)) as "401/403 Denied"
     count(eval(status_code>=500)) as "5xx Errors"
